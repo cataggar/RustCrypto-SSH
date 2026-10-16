@@ -14,6 +14,9 @@ use {
 #[cfg(feature = "ecdsa")]
 use super::{EcdsaPublicKey, SkEcdsaSha2NistP256};
 
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+use super::Mldsa87P384PublicKey;
+
 #[cfg(feature = "sha2")]
 use crate::{Fingerprint, HashAlg};
 
@@ -31,6 +34,10 @@ pub enum KeyData {
 
     /// Ed25519 public key data.
     Ed25519(Ed25519PublicKey),
+
+    /// Composite ML-DSA-87 with ECDSA/NIST P-384 public key data (`ssh-mldsa87-p384`).
+    #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+    Mldsa87P384(Mldsa87P384PublicKey),
 
     /// RSA public key data.
     #[cfg(feature = "alloc")]
@@ -70,6 +77,8 @@ impl KeyData {
             #[cfg(feature = "ecdsa")]
             Self::Ecdsa(key) => key.algorithm(),
             Self::Ed25519(_) => Algorithm::Ed25519,
+            #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+            Self::Mldsa87P384(_) => Algorithm::Mldsa87P384,
             #[cfg(feature = "alloc")]
             Self::Rsa(_) => Algorithm::Rsa { hash: None },
             #[cfg(feature = "ecdsa")]
@@ -108,6 +117,16 @@ impl KeyData {
         match self {
             Self::Ed25519(key) => Some(key),
             #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
+    /// Get `ssh-mldsa87-p384` composite public key if this key is the correct type.
+    #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+    #[must_use]
+    pub fn mldsa87_p384(&self) -> Option<&Mldsa87P384PublicKey> {
+        match self {
+            Self::Mldsa87P384(key) => Some(key),
             _ => None,
         }
     }
@@ -200,6 +219,13 @@ impl KeyData {
         matches!(self, Self::Ed25519(_))
     }
 
+    /// Is this key an `ssh-mldsa87-p384` composite key?
+    #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+    #[must_use]
+    pub fn is_mldsa87_p384(&self) -> bool {
+        matches!(self, Self::Mldsa87P384(_))
+    }
+
     /// Is this key an RSA key?
     #[cfg(feature = "alloc")]
     #[must_use]
@@ -250,6 +276,8 @@ impl KeyData {
                 _ => Err(Error::AlgorithmUnknown),
             },
             Algorithm::Ed25519 => Ed25519PublicKey::decode(reader).map(Self::Ed25519),
+            #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+            Algorithm::Mldsa87P384 => Mldsa87P384PublicKey::decode(reader).map(Self::Mldsa87P384),
             #[cfg(feature = "alloc")]
             Algorithm::Rsa { .. } => RsaPublicKey::decode(reader).map(Self::Rsa),
             #[cfg(feature = "ecdsa")]
@@ -282,6 +310,8 @@ impl KeyData {
             #[cfg(feature = "ecdsa")]
             Self::Ecdsa(key) => key.encoded_len(),
             Self::Ed25519(key) => key.encoded_len(),
+            #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+            Self::Mldsa87P384(key) => key.encoded_len(),
             #[cfg(feature = "alloc")]
             Self::Rsa(key) => key.encoded_len(),
             #[cfg(feature = "ecdsa")]
@@ -302,6 +332,8 @@ impl KeyData {
             #[cfg(feature = "ecdsa")]
             Self::Ecdsa(key) => key.encode(writer),
             Self::Ed25519(key) => key.encode(writer),
+            #[cfg(all(feature = "alloc", feature = "ecdsa"))]
+            Self::Mldsa87P384(key) => key.encode(writer),
             #[cfg(feature = "alloc")]
             Self::Rsa(key) => key.encode(writer),
             #[cfg(feature = "ecdsa")]
@@ -374,6 +406,13 @@ impl From<EcdsaPublicKey> for KeyData {
 impl From<Ed25519PublicKey> for KeyData {
     fn from(public_key: Ed25519PublicKey) -> KeyData {
         Self::Ed25519(public_key)
+    }
+}
+
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+impl From<Mldsa87P384PublicKey> for KeyData {
+    fn from(public_key: Mldsa87P384PublicKey) -> KeyData {
+        Self::Mldsa87P384(public_key)
     }
 }
 

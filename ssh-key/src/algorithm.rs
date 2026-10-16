@@ -37,6 +37,9 @@ const CERT_ECDSA_SHA2_P521: &str = "ecdsa-sha2-nistp521-cert-v01@openssh.com";
 /// OpenSSH certificate for Ed25519 public key
 const CERT_ED25519: &str = "ssh-ed25519-cert-v01@openssh.com";
 
+/// OpenSSH certificate for composite ML-DSA-87 + ECDSA P-384 public key
+const CERT_MLDSA87_P384: &str = "ssh-mldsa87-p384-cert-v01@openssh.com";
+
 /// OpenSSH certificate with RSA public key
 const CERT_RSA: &str = "ssh-rsa-cert-v01@openssh.com";
 
@@ -82,6 +85,9 @@ const SSH_DSA: &str = "ssh-dss";
 /// Ed25519
 const SSH_ED25519: &str = "ssh-ed25519";
 
+/// Composite ML-DSA-87 with ECDSA P-384
+const ALG_MLDSA87_P384: &str = "ssh-mldsa87-p384";
+
 /// RSA
 const SSH_RSA: &str = "ssh-rsa";
 
@@ -107,6 +113,9 @@ pub enum Algorithm {
     /// Ed25519
     #[default]
     Ed25519,
+
+    /// Composite ML-DSA-87 with ECDSA/NIST-P384 (`ssh-mldsa87-p384`)
+    Mldsa87P384,
 
     /// RSA
     Rsa {
@@ -186,6 +195,7 @@ impl Algorithm {
                 curve: EcdsaCurve::NistP521,
             }),
             CERT_ED25519 => Ok(Algorithm::Ed25519),
+            CERT_MLDSA87_P384 => Ok(Algorithm::Mldsa87P384),
             CERT_RSA => Ok(Algorithm::Rsa { hash: None }),
             CERT_RSA_SHA2_256 => Ok(Algorithm::Rsa {
                 hash: Some(HashAlg::Sha256),
@@ -213,6 +223,7 @@ impl Algorithm {
                 EcdsaCurve::NistP521 => ECDSA_SHA2_P521,
             },
             Algorithm::Ed25519 => SSH_ED25519,
+            Algorithm::Mldsa87P384 => ALG_MLDSA87_P384,
             Algorithm::Rsa { hash } => match hash {
                 None => SSH_RSA,
                 Some(HashAlg::Sha256) => RSA_SHA2_256,
@@ -243,6 +254,7 @@ impl Algorithm {
                 EcdsaCurve::NistP521 => CERT_ECDSA_SHA2_P521,
             },
             Algorithm::Ed25519 => CERT_ED25519,
+            Algorithm::Mldsa87P384 => CERT_MLDSA87_P384,
             Algorithm::Rsa { hash: None } => CERT_RSA,
             Algorithm::Rsa {
                 hash: Some(HashAlg::Sha256),
@@ -273,6 +285,12 @@ impl Algorithm {
     #[must_use]
     pub fn is_ed25519(self) -> bool {
         self == Algorithm::Ed25519
+    }
+
+    /// Is the algorithm `ssh-mldsa87-p384`?
+    #[must_use]
+    pub fn is_mldsa87_p384(&self) -> bool {
+        matches!(self, Self::Mldsa87P384)
     }
 
     /// Is the algorithm RSA?
@@ -324,6 +342,7 @@ impl str::FromStr for Algorithm {
                 hash: Some(HashAlg::Sha512),
             }),
             SSH_ED25519 => Ok(Algorithm::Ed25519),
+            ALG_MLDSA87_P384 => Ok(Algorithm::Mldsa87P384),
             SSH_RSA => Ok(Algorithm::Rsa { hash: None }),
             SK_ECDSA_SHA2_P256 => Ok(Algorithm::SkEcdsaSha2NistP256),
             SK_SSH_ED25519 => Ok(Algorithm::SkEd25519),
