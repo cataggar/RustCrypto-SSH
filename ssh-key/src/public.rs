@@ -8,6 +8,8 @@ mod dsa;
 mod ecdsa;
 mod ed25519;
 mod key_data;
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+mod mldsa87_p384;
 #[cfg(feature = "alloc")]
 mod opaque;
 #[cfg(feature = "alloc")]
@@ -26,6 +28,9 @@ pub use self::{
 
 #[cfg(feature = "ecdsa")]
 pub use self::{ecdsa::EcdsaPublicKey, sk::SkEcdsaSha2NistP256};
+
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+pub use self::mldsa87_p384::Mldsa87P384PublicKey;
 
 pub(crate) use self::ssh_format::SshFormat;
 
@@ -447,6 +452,13 @@ impl From<EcdsaPublicKey> for PublicKey {
 
 impl From<Ed25519PublicKey> for PublicKey {
     fn from(public_key: Ed25519PublicKey) -> PublicKey {
+        KeyData::from(public_key).into()
+    }
+}
+
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+impl From<Mldsa87P384PublicKey> for PublicKey {
+    fn from(public_key: Mldsa87P384PublicKey) -> PublicKey {
         KeyData::from(public_key).into()
     }
 }

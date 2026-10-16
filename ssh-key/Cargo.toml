@@ -31,6 +31,7 @@ dsa = { version = "0.7", optional = true, default-features = false, features = [
 ed25519-dalek = { version = "3", optional = true, default-features = false }
 hex = { version = "0.4", optional = true, default-features = false, features = ["alloc"] }
 hmac = { version = "0.13", optional = true }
+ml-dsa = { version = "0.1.1", optional = true, default-features = false, features = ["alloc", "rand_core", "zeroize"] }
 p256 = { version = "0.14", optional = true, default-features = false, features = ["ecdsa"] }
 p384 = { version = "0.14", optional = true, default-features = false, features = ["ecdsa"] }
 p521 = { version = "0.14", optional = true, default-features = false, features = ["ecdsa"] }
@@ -63,6 +64,7 @@ encryption = [
     "rand_core"
 ]
 getrandom = ["cipher/getrandom", "rand_core"]
+mldsa = ["dep:ml-dsa", "alloc", "p384", "sha2"]
 p256 = ["dep:p256", "ecdsa", "sha2"]
 p384 = ["dep:p384", "ecdsa"]
 p521 = ["dep:p521", "ecdsa"]

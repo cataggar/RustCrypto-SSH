@@ -99,6 +99,8 @@ mod dsa;
 mod ecdsa;
 mod ed25519;
 mod keypair;
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+mod mldsa87_p384;
 #[cfg(feature = "alloc")]
 mod opaque;
 #[cfg(feature = "alloc")]
@@ -127,7 +129,7 @@ pub use crate::{
 pub use self::ecdsa::{EcdsaKeypair, EcdsaPrivateKey};
 
 #[cfg(all(feature = "alloc", feature = "ecdsa"))]
-pub use self::sk::SkEcdsaSha2NistP256;
+pub use self::{mldsa87_p384::Mldsa87P384Keypair, sk::SkEcdsaSha2NistP256};
 
 use crate::{Algorithm, Cipher, Error, Kdf, PublicKey, Result, public};
 use cipher::Tag;
@@ -625,6 +627,8 @@ impl PrivateKey {
             Algorithm::Ecdsa { curve } => KeypairData::from(EcdsaKeypair::random(rng, curve)?),
             #[cfg(feature = "ed25519")]
             Algorithm::Ed25519 => KeypairData::from(Ed25519Keypair::random(rng)),
+            #[cfg(all(feature = "alloc", feature = "mldsa"))]
+            Algorithm::Mldsa87P384 => KeypairData::from(Mldsa87P384Keypair::random(rng)?),
             #[cfg(feature = "rsa")]
             Algorithm::Rsa { .. } => {
                 KeypairData::from(RsaKeypair::random(rng, DEFAULT_RSA_KEY_SIZE)?)
@@ -994,6 +998,15 @@ impl From<EcdsaKeypair> for PrivateKey {
 
 impl From<Ed25519Keypair> for PrivateKey {
     fn from(keypair: Ed25519Keypair) -> PrivateKey {
+        KeypairData::from(keypair)
+            .try_into()
+            .expect(CONVERSION_ERROR_MSG)
+    }
+}
+
+#[cfg(all(feature = "alloc", feature = "ecdsa"))]
+impl From<Mldsa87P384Keypair> for PrivateKey {
+    fn from(keypair: Mldsa87P384Keypair) -> PrivateKey {
         KeypairData::from(keypair)
             .try_into()
             .expect(CONVERSION_ERROR_MSG)

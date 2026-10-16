@@ -23,10 +23,13 @@ use crate::{
 };
 
 #[cfg(feature = "rsa")]
-use {
-    crate::{HashAlg, private::RsaKeypair, public::RsaPublicKey},
-    sha2::Sha512,
-};
+use crate::{HashAlg, private::RsaKeypair, public::RsaPublicKey};
+
+#[cfg(feature = "mldsa")]
+use crate::{private::Mldsa87P384Keypair, public::Mldsa87P384PublicKey};
+
+#[cfg(any(feature = "rsa", feature = "mldsa"))]
+use sha2::Sha512;
 
 #[cfg(any(all(feature = "sha1", feature = "rsa"), feature = "dsa"))]
 use sha1::Sha1;
@@ -34,12 +37,18 @@ use sha1::Sha1;
 #[cfg(any(feature = "ed25519", feature = "rsa", feature = "p256"))]
 use sha2::Sha256;
 
-#[cfg(any(feature = "dsa", feature = "ed25519", feature = "p256"))]
+#[cfg(any(
+    feature = "dsa",
+    feature = "ed25519",
+    feature = "p256",
+    feature = "mldsa"
+))]
 use encoding::digest::Digest;
 
 const DSA_COMPONENT_SIZE: usize = 20;
 const DSA_SIGNATURE_SIZE: usize = DSA_COMPONENT_SIZE * 2;
 const ED25519_SIGNATURE_SIZE: usize = 64;
+const MLDSA87_SIGNATURE_SIZE: usize = 4627;
 const SK_SIGNATURE_TRAILER_SIZE: usize = 5; // flags(u8), counter(u32)
 const SK_ED25519_SIGNATURE_SIZE: usize = ED25519_SIGNATURE_SIZE + SK_SIGNATURE_TRAILER_SIZE;
 
@@ -109,6 +118,12 @@ impl Signature {
             Algorithm::Dsa if data.len() == DSA_SIGNATURE_SIZE => (),
             Algorithm::Ecdsa { curve } => ecdsa_sig_size(&data, curve, false)?,
             Algorithm::Ed25519 if data.len() == ED25519_SIGNATURE_SIZE => (),
+            Algorithm::Mldsa87P384 => {
+                let ecdsa_part = data
+                    .get(MLDSA87_SIGNATURE_SIZE..)
+                    .ok_or(encoding::Error::Length)?;
+                ecdsa_sig_size(ecdsa_part, EcdsaCurve::NistP384, false)?;
+            }
             Algorithm::SkEd25519 if data.len() == SK_ED25519_SIGNATURE_SIZE => (),
             Algorithm::SkEcdsaSha2NistP256 => ecdsa_sig_size(&data, EcdsaCurve::NistP256, true)?,
             Algorithm::Rsa { .. } => (),
@@ -291,6 +306,8 @@ impl Signer<Signature> for private::KeypairData {
             Self::Ecdsa(keypair) => keypair.try_sign(message),
             #[cfg(feature = "ed25519")]
             Self::Ed25519(keypair) => keypair.try_sign(message),
+            #[cfg(feature = "mldsa")]
+            Self::Mldsa87P384(keypair) => keypair.try_sign(message),
             #[cfg(feature = "rsa")]
             Self::Rsa(keypair) => keypair.try_sign(message),
             _ => Err(self.algorithm()?.unsupported_error().into()),
@@ -314,6 +331,8 @@ impl Verifier<Signature> for public::KeyData {
             Self::Ecdsa(pk) => pk.verify(message, signature),
             #[cfg(feature = "ed25519")]
             Self::Ed25519(pk) => pk.verify(message, signature),
+            #[cfg(feature = "mldsa")]
+            Self::Mldsa87P384(pk) => pk.verify(message, signature),
             #[cfg(feature = "ed25519")]
             Self::SkEd25519(pk) => pk.verify(message, signature),
             #[cfg(feature = "p256")]
@@ -759,6 +778,102 @@ impl Verifier<Signature> for RsaPublicKey {
     }
 }
 
+#[cfg(feature = "mldsa")]
+const COMPOSITE_PREFIX: &[u8; 32] = b"CompositeAlgorithmSignatures2025";
+
+#[cfg(feature = "mldsa")]
+const MLDSA87_P384_LABEL: &[u8; 33] = b"COMPSIG-MLDSA87-ECDSA-P384-SHA512";
+
+#[cfg(feature = "mldsa")]
+const MLDSA87_P384_M_PRIME_SIZE: usize = 32 + 33 + 1 + 64;
+
+#[cfg(feature = "mldsa")]
+fn mldsa87_p384_m_prime(message: &[u8]) -> [u8; MLDSA87_P384_M_PRIME_SIZE] {
+    let hash = Sha512::digest(message);
+    let mut m_prime = [0u8; MLDSA87_P384_M_PRIME_SIZE];
+    m_prime[..32].copy_from_slice(COMPOSITE_PREFIX);
+    m_prime[32..65].copy_from_slice(MLDSA87_P384_LABEL);
+    m_prime[65] = 0x00;
+    m_prime[66..130].copy_from_slice(&hash);
+    m_prime
+}
+
+#[cfg(feature = "mldsa")]
+impl Signer<Signature> for Mldsa87P384Keypair {
+    fn try_sign(&self, message: &[u8]) -> signature::Result<Signature> {
+        let m_prime = mldsa87_p384_m_prime(message);
+
+        let mldsa_sk = ml_dsa::SigningKey::<ml_dsa::MlDsa87>::from_seed(self.mldsa_seed().into());
+        let mldsa_sig = mldsa_sk
+            .expanded_key()
+            .sign_deterministic(&m_prime, MLDSA87_P384_LABEL)?;
+        let mldsa_sig_bytes = mldsa_sig.encode();
+
+        let ecdsa_sk = p384::ecdsa::SigningKey::from_slice(self.ecdsa_private().as_slice())?;
+        let ecdsa_sig: p384::ecdsa::Signature = ecdsa_sk.try_sign(&m_prime)?;
+        let (r, s) = ecdsa_sig.split_bytes();
+
+        let r_mpint = Mpint::from_positive_bytes(&r);
+        let s_mpint = Mpint::from_positive_bytes(&s);
+        let cap = [
+            MLDSA87_SIGNATURE_SIZE,
+            r_mpint.encoded_len().map_err(Error::from)?,
+            s_mpint.encoded_len().map_err(Error::from)?,
+        ]
+        .checked_sum()
+        .map_err(Error::from)?;
+
+        let mut data = Vec::with_capacity(cap);
+        data.extend_from_slice(mldsa_sig_bytes.as_slice());
+        r_mpint.encode(&mut data).map_err(Error::from)?;
+        s_mpint.encode(&mut data).map_err(Error::from)?;
+
+        Ok(Signature {
+            algorithm: Algorithm::Mldsa87P384,
+            data,
+        })
+    }
+}
+
+#[cfg(feature = "mldsa")]
+impl Verifier<Signature> for Mldsa87P384PublicKey {
+    fn verify(&self, message: &[u8], signature: &Signature) -> signature::Result<()> {
+        if signature.algorithm != Algorithm::Mldsa87P384 {
+            return Err(signature.algorithm().unsupported_error().into());
+        }
+
+        let (mldsa_sig_bytes, mut ecdsa_reader) = signature
+            .as_bytes()
+            .split_at_checked(MLDSA87_SIGNATURE_SIZE)
+            .ok_or_else(signature::Error::new)?;
+
+        let r = Mpint::decode(&mut ecdsa_reader).map_err(Error::from)?;
+        let s = Mpint::decode(&mut ecdsa_reader).map_err(Error::from)?;
+        if !ecdsa_reader.is_empty() {
+            return Err(signature::Error::new());
+        }
+
+        let m_prime = mldsa87_p384_m_prime(message);
+
+        let mldsa_sig = ml_dsa::Signature::<ml_dsa::MlDsa87>::try_from(mldsa_sig_bytes)?;
+        let mldsa_vk = ml_dsa::VerifyingKey::<ml_dsa::MlDsa87>::decode(self.mldsa().into());
+        if !mldsa_vk.verify_with_context(&m_prime, MLDSA87_P384_LABEL, &mldsa_sig) {
+            return Err(signature::Error::new());
+        }
+
+        let (Some(r), Some(s)) = (
+            zero_pad_field_bytes::<p384::FieldBytes>(r),
+            zero_pad_field_bytes::<p384::FieldBytes>(s),
+        ) else {
+            return Err(Error::Crypto.into());
+        };
+        let ecdsa_sig = p384::ecdsa::Signature::from_scalars(r, s)?;
+        let ecdsa_vk =
+            p384::ecdsa::VerifyingKey::from_sec1_point(self.ecdsa()).map_err(|_| Error::Crypto)?;
+        ecdsa_vk.verify(&m_prime, &ecdsa_sig)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Signature;
@@ -1035,5 +1150,61 @@ mod tests {
         let decoded = Signature::decode(&mut &encoded[..]).unwrap();
 
         assert!(Verifier::verify(key.public(), EXAMPLE_MSG, &decoded).is_ok());
+    }
+
+    #[cfg(feature = "mldsa")]
+    #[test]
+    fn sign_and_verify_mldsa87_p384() {
+        use crate::{
+            PrivateKey, PublicKey,
+            private::{EcdsaPrivateKey, KeypairData, Mldsa87P384Keypair},
+            public::KeyData,
+        };
+        use encoding::Decode;
+
+        let seed = [0x42u8; Mldsa87P384Keypair::MLDSA_SEED_SIZE];
+        let scalar = EcdsaPrivateKey::<48>::from([0x24u8; 48]);
+        let keypair = Mldsa87P384Keypair::from_private_components(seed, scalar).unwrap();
+
+        let priv_key = PrivateKey::from(keypair.clone());
+        let openssh = priv_key.to_openssh(crate::LineEnding::LF).unwrap();
+        let decoded_priv = PrivateKey::from_openssh(&openssh).unwrap();
+        assert_eq!(decoded_priv.algorithm(), Algorithm::Mldsa87P384);
+
+        let pub_key = PublicKey::from(keypair.public().clone());
+        let openssh_pub = pub_key.to_openssh().unwrap();
+        let decoded_pub = PublicKey::from_openssh(&openssh_pub).unwrap();
+        assert_eq!(decoded_pub.algorithm(), Algorithm::Mldsa87P384);
+
+        let sig = KeypairData::from(keypair.clone())
+            .try_sign(EXAMPLE_MSG)
+            .unwrap();
+        assert_eq!(sig.algorithm(), Algorithm::Mldsa87P384);
+
+        let encoded_sig = sig.encode_vec().unwrap();
+        let decoded_sig = Signature::decode(&mut encoded_sig.as_slice()).unwrap();
+        assert_eq!(decoded_sig, sig);
+
+        let key_data = KeyData::from(keypair.public().clone());
+        assert!(key_data.verify(EXAMPLE_MSG, &decoded_sig).is_ok());
+        assert!(key_data.verify(b"wrong message", &decoded_sig).is_err());
+
+        // Corrupt ML-DSA signature portion (first 4627 bytes)
+        let mut bad_mldsa_bytes = sig.as_bytes().to_vec();
+        bad_mldsa_bytes[0] ^= 0x01;
+        let bad_mldsa_sig = Signature::new(Algorithm::Mldsa87P384, bad_mldsa_bytes).unwrap();
+        assert!(key_data.verify(EXAMPLE_MSG, &bad_mldsa_sig).is_err());
+
+        // Corrupt ECDSA signature portion (last byte of s)
+        let mut bad_ecdsa_bytes = sig.as_bytes().to_vec();
+        let last = bad_ecdsa_bytes.len() - 1;
+        bad_ecdsa_bytes[last] ^= 0x01;
+        let bad_ecdsa_sig = Signature::new(Algorithm::Mldsa87P384, bad_ecdsa_bytes).unwrap();
+        assert!(key_data.verify(EXAMPLE_MSG, &bad_ecdsa_sig).is_err());
+
+        // Trailing byte in signature payload must fail Signature::new
+        let mut trailing_bytes = sig.as_bytes().to_vec();
+        trailing_bytes.push(0x00);
+        assert!(Signature::new(Algorithm::Mldsa87P384, trailing_bytes).is_err());
     }
 }
